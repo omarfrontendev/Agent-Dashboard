@@ -88,8 +88,9 @@ export const useAvailableProfiles = () => {
   const catalog = Array.isArray(data) ? data : [];
   const availableProfiles = Object.values(
     (catalog as PermissionCatalogItem[])
-      .filter(({ key }: any) => key?.startsWith("agents."))
+      .filter(({ key }: any) => key?.startsWith("agent."))
       .map(({ key, nameEn, nameAr, moduleNameEn, moduleNameAr }) => {
+        console.log(key)
         const parts = key.split(".");
         const method = parts.pop();
         const module = lang === "en" ? moduleNameEn : moduleNameAr;
