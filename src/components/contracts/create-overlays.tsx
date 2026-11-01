@@ -1,0 +1,525 @@
+import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { AlertTriangle, Building2, CalendarDays, Coins, Info, Save } from "lucide-react";
+import { IconModal } from "@/components/layout/overlay";
+import { Button } from "@/components/ui/button";
+import { DateField } from "@/components/ui/date-field";
+import { addDays, dateOf, keyOf } from "@/components/ui/date-picker";
+import { fill, useLanguage } from "@/lib/i18n";
+import { WEEKDAY_NUMBER, type Weekday } from "@/store/features/contracts/types";
+import { cn } from "@/lib/utils";
+import {
+  currencyPanel,
+  hotelPickerPanel,
+  overlapPanel,
+  termPanel,
+  unsavedPanel,
+  weekendPanel,
+  type OverlapDay,
+  type PickerPanel,
+} from "@/lib/contract-overlay-data";
+
+/** The radio row OV 03.1P and OV 03.1R both use. */
+export function OptionRow({
+  label,
+  hint,
+  on,
+  onSelect,
+}: {
+  label: string;
+  hint: string;
+  on: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-start transition-colors",
+        on
+          ? "border-primary-subtle-border bg-primary-subtle"
+          : "border-border-subtle hover:bg-surface-subtle"
+      )}
+    >
+      <span
+        className={cn(
+          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border bg-surface-default",
+          on ? "border-brand-deep" : "border-border-strong"
+        )}
+      >
+        {on && (
+          <span className="h-2 w-2 rounded-full bg-brand-deep" aria-hidden="true" />
+        )}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[13px] font-medium text-text-primary">
+          {label}
+        </span>
+        <span className="mt-0.5 block text-[11.5px] leading-4 text-text-muted">
+          {hint}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/** OV 03.1P / OV 03.1R — pick one of a short, explained list. */
+export function PickerOverlay({
+  panel,
+  icon,
+  initial = 0,
+  onClose,
+  onConfirm,
+}: {
+  panel: PickerPanel;
+  icon: "hotel" | "currency";
+  initial?: number;
+  onClose: () => void;
+  /** The row the supplier actually picked, not always the first one. */
+  onConfirm: (index: number) => void;
+}) {
+  const { lang } = useLanguage();
+  const ar = lang === "ar";
+  const [picked, setPicked] = useState(initial);
+  const pickedCode = panel.options[picked]?.label.split(" · ")[0] ?? "";
+
+  return (
+    <IconModal
+      icon={
+        icon === "hotel" ? (
+          <Building2 className="h-5 w-5" aria-hidden="true" />
+        ) : (
+          <Coins className="h-5 w-5" aria-hidden="true" />
+        )
+      }
+      overline={ar ? panel.overlineAr : panel.overline}
+      title={ar ? panel.titleAr : panel.title}
+      body={ar ? panel.bodyAr : panel.body}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            {ar ? panel.cancelAr : panel.cancel}
+          </Button>
+          <Button onClick={() => onConfirm(picked)}>
+            {fill(ar ? panel.confirmAr : panel.confirm, { option: pickedCode })}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2">
+        {panel.options.map((option, index) => (
+          <OptionRow
+            key={option.label}
+            label={ar ? option.labelAr : option.label}
+            hint={ar ? option.hintAr : option.hint}
+            on={index === picked}
+            onSelect={() => setPicked(index)}
+          />
+        ))}
+      </div>
+      {panel.note && (
+        <p className="flex items-start gap-2 text-[11.5px] leading-4 text-text-muted">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {ar ? panel.noteAr : panel.note}
+        </p>
+      )}
+    </IconModal>
+  );
+}
+
+/** OV 03.1Q / Q2 / Q3 — the term, the bad end date, and the overlap. */
+export function TermOverlay({
+  state = "ok",
+  weekendDays = [],
+  initialStart,
+  initialEnd,
+  onClose,
+  onConfirm,
+}: {
+  state?: "ok" | "error" | "overlap";
+  weekendDays?: Weekday[];
+  initialStart?: string;
+  initialEnd?: string;
+  onClose: () => void;
+  onConfirm: (start: string, end: string) => void;
+}) {
+  const { c, lang } = useLanguage();
+  const ar = lang === "ar";
+  const p = termPanel;
+  const v = c.builder.form.v;
+  const weekendNumbers = weekendDays.map((day) => WEEKDAY_NUMBER[day]);
+  const schema = z
+    .object({
+      start: z.string().min(1, v.startDate),
+      end: z.string().min(1, v.endDate),
+    })
+    .refine((term) => !term.start || !term.end || term.end > term.start, {
+      path: ["end"],
+      message: v.endAfterStart,
+    });
+  const {
+    handleSubmit,
+    setValue,
+    watch,
+    formState: { errors, isSubmitted },
+  } = useForm<z.infer<typeof schema>>({
+    resolver: zodResolver(schema),
+    mode: "onChange",
+    defaultValues: { start: initialStart ?? "", end: initialEnd ?? "" },
+  });
+  const start = watch("start");
+  const end = watch("end");
+  const endMin = start ? addDays(start, 1) : undefined;
+
+  const pickEnd = (next: string) => setValue("end", next, { shouldValidate: true });
+  const pickRange = (range: { start: string; end: string }) => {
+    setValue("start", range.start, { shouldValidate: true });
+    setValue("end", range.end > range.start ? range.end : "", {
+      shouldValidate: isSubmitted || range.end > range.start,
+    });
+  };
+
+  const usePreset = (preset: (typeof p.presets)[number]) => {
+    const from = start || keyOf(new Date());
+    const base = dateOf(from);
+    const to = preset.months
+      ? keyOf(new Date(base.getFullYear(), base.getMonth() + preset.months, base.getDate() - 1))
+      : addDays(from, (preset.days ?? 1) - 1);
+    setValue("start", from, { shouldValidate: true });
+    setValue("end", to, { shouldValidate: true });
+  };
+
+  return (
+    <IconModal
+      icon={<CalendarDays className="h-5 w-5" aria-hidden="true" />}
+      overline={ar ? p.overlineAr : p.overline}
+      title={ar ? p.titleAr : p.title}
+      body={ar ? p.bodyAr : p.body}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            {ar ? p.cancelAr : p.cancel}
+          </Button>
+          <Button onClick={handleSubmit((term) => onConfirm(term.start, term.end))}>
+            {state === "overlap"
+              ? ar
+                ? p.confirmOverlapAr
+                : p.confirmOverlap
+              : ar
+                ? p.confirmAr
+                : p.confirm}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <DateField
+            mode="range"
+            showStart
+            weekend={weekendNumbers}
+            label={ar ? p.startLabelAr : p.startLabel}
+            value={{ start, end: end || null }}
+            placeholder={ar ? p.startPhAr : p.startPh}
+            onChange={pickRange}
+            invalid={Boolean(errors.start)}
+          />
+          {errors.start && (
+            <p className="mt-1 text-[11.5px] text-status-danger">{errors.start.message}</p>
+          )}
+        </div>
+        <div>
+          <DateField
+            label={ar ? p.endLabelAr : p.endLabel}
+            value={end}
+            placeholder={ar ? p.endPhAr : p.endPh}
+            min={endMin}
+            disabled={!start}
+            weekend={weekendNumbers}
+            onChange={pickEnd}
+            invalid={Boolean(errors.end)}
+          />
+          {errors.end ? (
+            <p className="mt-1 text-[11.5px] text-status-danger">{errors.end.message}</p>
+          ) : (
+            !start && (
+              <p className="mt-1 text-[11.5px] text-text-muted">
+                {ar ? p.endNeedsStartAr : p.endNeedsStart}
+              </p>
+            )
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {p.presets.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            onClick={() => usePreset(preset)}
+            className="rounded-lg bg-status-neutral-bg px-3 py-1.5 text-xs font-medium text-brand-deep transition-colors hover:bg-border-default"
+          >
+            {ar ? preset.labelAr : preset.label}
+          </button>
+        ))}
+      </div>
+
+      {state === "overlap" && (
+        <div className="rounded-xl border border-status-warning/25 bg-status-warning-bg p-3.5">
+          <p className="text-sm font-semibold text-status-warning">
+            {ar ? p.overlapTitleAr : p.overlapTitle}
+          </p>
+          <p className="mt-1 text-[12.5px] leading-5 text-text-secondary">
+            {ar ? p.overlapBodyAr : p.overlapBody}
+          </p>
+        </div>
+      )}
+
+    </IconModal>
+  );
+}
+
+/** OV 03.1S — the two nights that carry the weekend price. */
+export function WeekendOverlay({
+  initial,
+  onClose,
+  onConfirm,
+}: {
+  initial?: string[];
+  onClose: () => void;
+  onConfirm: (days: string[]) => void;
+}) {
+  const { lang } = useLanguage();
+  const ar = lang === "ar";
+  const p = weekendPanel;
+  const [picked, setPicked] = useState<string[]>(
+    initial?.length ? initial : [...p.selected]
+  );
+
+  return (
+    <IconModal
+      icon={<CalendarDays className="h-5 w-5" aria-hidden="true" />}
+      overline={ar ? p.overlineAr : p.overline}
+      title={ar ? p.titleAr : p.title}
+      body={ar ? p.bodyAr : p.body}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            {ar ? p.cancelAr : p.cancel}
+          </Button>
+          <Button disabled={picked.length === 0} onClick={() => onConfirm(picked)}>
+            {ar ? p.confirmAr : p.confirm}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-wrap gap-2">
+        {p.days.map((day) => {
+          const on = picked.includes(day.label);
+          return (
+            <button
+              key={day.label}
+              type="button"
+              onClick={() =>
+                setPicked((prev) =>
+                  prev.includes(day.label)
+                    ? prev.filter((x) => x !== day.label)
+                    : [...prev, day.label]
+                )
+              }
+              className={cn(
+                "min-w-[62px] rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                on
+                  ? "border-brand-deep bg-brand-deep text-primary"
+                  : "border-border-strong bg-surface-default text-text-primary hover:bg-surface-subtle"
+              )}
+            >
+              {ar ? day.labelAr : day.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11.5px] leading-4 text-text-muted">
+        {ar ? p.noteAr : p.note}
+      </p>
+    </IconModal>
+  );
+}
+
+/** OV 03.11 — leaving a contract that was never live. */
+export function UnsavedOverlay({
+  onClose,
+  onDiscard,
+  onSave,
+}: {
+  onClose: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  const { lang } = useLanguage();
+  const ar = lang === "ar";
+  const p = unsavedPanel;
+
+  return (
+    <IconModal
+      icon={<Save className="h-5 w-5" aria-hidden="true" />}
+      overline={ar ? p.overlineAr : p.overline}
+      title={ar ? p.titleAr : p.title}
+      body={ar ? p.bodyAr : p.body}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onDiscard}>
+            {ar ? p.discardAr : p.discard}
+          </Button>
+          <Button variant="outline" onClick={onClose}>
+            {ar ? p.keepAr : p.keep}
+          </Button>
+          <Button onClick={onSave}>{ar ? p.saveAr : p.save}</Button>
+        </>
+      }
+    >
+      <></>
+    </IconModal>
+  );
+}
+
+const DAY_TONE: Record<OverlapDay, string> = {
+  ramadan: "bg-cell-draft-bg text-cell-draft",
+  overlap: "bg-cell-conflict-bg text-status-danger",
+  locked: "bg-cell-locked-bg text-text-muted",
+  free: "bg-surface-default text-text-secondary",
+};
+
+/** OV 03.13 — the nights that already belong to another season. */
+export function SeasonOverlapOverlay({
+  onClose,
+  onUseDates,
+}: {
+  onClose: () => void;
+  onUseDates: () => void;
+}) {
+  const { lang } = useLanguage();
+  const ar = lang === "ar";
+  const p = overlapPanel;
+  const nights = Array.from({ length: 31 }, (_, index) => index + 1);
+
+  return (
+    <IconModal
+      icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}
+      tone="danger"
+      overline={ar ? p.overlineAr : p.overline}
+      title={ar ? p.titleAr : p.title}
+      body={ar ? p.bodyAr : p.body}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            {ar ? p.cancelAr : p.cancel}
+          </Button>
+          {/* BR-00-22 - off because the dates overlap; the panel says so. */}
+          <Button
+            disabled
+            reason={ar ? p.bodyAr : p.body}
+          >
+            {ar ? p.confirmAr : p.confirm}
+          </Button>
+        </>
+      }
+    >
+      <div className="rounded-xl bg-surface-subtle p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-semibold text-text-primary">
+            {ar ? p.monthAr : p.month}
+          </p>
+          <p className="text-[11.5px] text-text-muted">
+            {ar ? p.pickedAr : p.picked}
+          </p>
+        </div>
+        <div className="mt-2 grid grid-cols-7 gap-1">
+          {(ar ? p.weekdaysAr : p.weekdays).map((day) => (
+            <span
+              key={day}
+              className="text-center text-[10px] font-semibold text-text-muted"
+            >
+              {day}
+            </span>
+          ))}
+          {nights.map((night) => {
+            const kind = p.dayKind(night);
+            return (
+              <span
+                key={night}
+                className={cn(
+                  "rounded px-1 py-1 text-center",
+                  DAY_TONE[kind]
+                )}
+              >
+                <span className="block text-[10px] font-semibold">
+                  {String(night).padStart(2, "0")}
+                </span>
+                {kind !== "free" && (
+                  <span className="mt-0.5 block truncate text-[8px] leading-3">
+                    {ar ? p.dayLabelAr[kind] : p.dayLabel[kind]}
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+          {p.legend.map((item) => (
+            <span
+              key={item.label}
+              className="flex items-center gap-1.5 text-[10px] text-text-muted"
+            >
+              <span
+                className={cn("h-2.5 w-2.5 rounded", DAY_TONE[item.kind])}
+                aria-hidden="true"
+              />
+              {ar ? item.labelAr : item.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-[10px] font-medium uppercase tracking-[0.04em] text-text-muted">
+          {ar ? p.fixLabelAr : p.fixLabel}
+        </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          {p.fixes.map((fix, index) => (
+            <div
+              key={fix.title}
+              className="rounded-xl border border-border-subtle p-3.5"
+            >
+              <p className="text-[13px] font-semibold text-text-primary">
+                {ar ? fix.titleAr : fix.title}
+              </p>
+              <p className="mt-1 text-[11.5px] leading-4 text-text-muted">
+                {ar ? fix.bodyAr : fix.body}
+              </p>
+              <button
+                type="button"
+                onClick={index === 0 ? onUseDates : onClose}
+                className="mt-2 text-xs font-medium text-text-link hover:underline"
+              >
+                {ar ? fix.actionAr : fix.action}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <p className="text-[11.5px] text-text-muted">{ar ? p.noteAr : p.note}</p>
+    </IconModal>
+  );
+}
+
+export { hotelPickerPanel, currencyPanel };

@@ -1,0 +1,831 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
+import { BookOpen, CircleAlert, RefreshCw, Search, UserPlus, UsersRound } from "lucide-react";
+import { PageShell, StatusPill } from "@/components/layout/page-shell";
+import { Button } from "@/components/ui/button";
+import {
+  InviteDialog,
+  ManageMemberDrawer,
+  PermissionReference,
+  TransferDialog,
+} from "@/components/team/team-overlays";
+import { Gated } from "@/components/system/permission-gate";
+import { fill, useLanguage } from "@/lib/i18n";
+import { RoleOverlay } from "@/components/team/role-overlay";
+import { roleNames, teamCopy } from "@/lib/team-copy";
+import { type RoleRow, type TeamMember, type TeamStatus } from "@/lib/team-data";
+import { useDispatch, useSelector } from "react-redux";
+import { fetchTeam } from "@/store/features/team/teamThunk";
+import { useProfiles } from "@/api/modules/profile-permissions/userProfiles";
+import { PermissionProfile } from "@/api/modules/profile-permissions/types";
+import { TableSkeleton } from "@/components/ui/skeletons";
+import { useMetrics } from "@/api/modules/team/userMetrics";
+import { DeleteDialog } from "@/components/ui/DeleteDialog";
+import { useDeletePermissionProfile } from "@/api/modules/profile-permissions/useDeletepermission";
+import { ReusablePagination } from "@/components/ui/ReusablePagination";
+
+export const Route = createFileRoute("/team/")({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: "roles"; as?: "admin"; state?: "created" } => ({
+    ...(search["tab"] === "roles" ? { tab: "roles" as const } : {}),
+    ...(search["as"] === "admin" ? { as: "admin" as const } : {}),
+    ...(search["state"] === "created" ? { state: "created" as const } : {}),
+  }),
+  head: () => ({
+    meta: [
+      { title: "Team & Access · Hoteliana Agent Portal" },
+      {
+        name: "description",
+        content: "Manage agent team members, invitations, roles, and account access.",
+      },
+      { property: "og:title", content: "Team & Access · Hoteliana Agent Portal" },
+      {
+        property: "og:description",
+        content: "Manage agent team members, invitations, roles, and account access.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+    ],
+  }),
+  component: TeamPage,
+});
+
+const statusTone = {
+  active: "success",
+  invited: "warning",
+  expired: "danger",
+  inactive: "neutral",
+} as const;
+
+function TeamPage() {
+  const { lang } = useLanguage();
+  const t = teamCopy[lang];
+  /* A count reads in the digits of the language around it. */ const num = (value: number) =>
+    value.toLocaleString(lang === "ar" ? "ar-EG" : "en-US");
+  const { tab, as, state } = Route.useSearch();
+  const onRoles = tab === "roles";
+  const asAdmin = as === "admin";
+
+  const dispatch = useDispatch<any>();
+  const { team, loading, error, meta } = useSelector((state: any) => state.team);
+  const [filter, setFilter] = useState<"all" | TeamStatus>("all");
+  const [invite, setInvite] = useState(false);
+  const [selected, setSelected] = useState<TeamMember | null>(null);
+  const [permissions, setPermissions] = useState(false);
+  const [transfer, setTransfer] = useState(false);
+  const [page, setPage] = useState(1);
+  const totalPages = meta?.totalPages ?? 1;
+  const PAGE_SIZE = 10;
+
+  const [searchRole, setSearchRole] = useState("");
+  const debouncedSearchRole = "" 
+  // useDebounce(searchRole, 500);
+  const [rolepage, setRolePage] = useState(1);
+
+  const {
+    profiles: roles,
+    isLoading,
+    refetch,
+    meta: rolesMeta,
+  } = useProfiles({
+    page: rolepage,
+    limit: PAGE_SIZE,
+    search: debouncedSearchRole.trim(),
+  });
+
+  const totalRolesPages = rolesMeta?.totalPages ?? 1;
+
+  const [search, setSearch] = useState("");
+  const debouncedSearch = ""
+  // useDebounce(search, 500);
+
+  // active => isActive && isActivated true
+  const teamParams = {
+    page, // API expects 1-based page
+    limit: PAGE_SIZE,
+    search: debouncedSearch.trim(),
+    isActive:
+      filter === "active"
+        ? true
+        : filter === "invited"
+          ? true
+          : filter === "deactivated"
+            ? false
+            : null,
+    isActivated: filter === "active" ? true : filter === "invited" ? false : null,
+  };
+
+  useEffect(() => {
+    void dispatch(fetchTeam(teamParams));
+  }, [dispatch, page, filter, debouncedSearch]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, debouncedSearch]);
+
+  useEffect(() => {
+    setRolePage(1);
+  }, [debouncedSearchRole]);
+
+  // const { data: metrics } = useMetrics();
+
+  const formatCount = (count: number, singular: string) => {
+    if (count === 0) return lang === "ar" ? `بدون ${singular}` : `no ${singular}`;
+    if (count === 1) return `1 ${singular}`;
+    return `${count} ${singular}s`;
+  };
+
+  const getTotalActiveUsers = (data: any) => {
+    if (!data) return;
+    const superAdminsActive = data?.superAdmins.find((item) => item.key === "active")?.value ?? 0;
+
+    const adminsActive = data?.admins.find((item) => item.key === "active")?.value ?? 0;
+
+    return superAdminsActive + adminsActive;
+  };
+
+  const getTotalInactiveUsers = (data: MetricsData) => {
+    if (!data) return;
+
+    const superAdminsInactive =
+      data.superAdmins.find((item) => item.key === "inactive")?.value ?? 0;
+
+    const adminsInactive = data.admins.find((item) => item.key === "inactive")?.value ?? 0;
+
+    return superAdminsInactive + adminsInactive;
+  };
+
+  const getActiveSuperAdmins = (data: MetricsData) => {
+    if (!data) return;
+
+    return data.superAdmins.find((item) => item.key === "active")?.value ?? 0;
+  };
+
+  const getActiveAdmins = (data: MetricsData) => {
+    if (!data) return;
+
+    return data.admins.find((item) => item.key === "active")?.value ?? 0;
+  };
+
+  const getTotalPendingUsers = (data: MetricsData) => {
+    if (!data) return;
+
+    const superAdminsPending = data.superAdmins.find((item) => item.key === "pending")?.value ?? 0;
+
+    const adminsPending = data.admins.find((item) => item.key === "pending")?.value ?? 0;
+
+    return superAdminsPending + adminsPending;
+  };
+
+  const getTotalUsers = (data: MetricsData) => {
+    if (!data) return;
+    const getStatusTotal = (users: MetadataItem<UserStatusKey>[]) =>
+      users
+        .filter(
+          (item) => item.key === "active" || item.key === "inactive" || item.key === "pending",
+        )
+        .reduce((total, item) => total + item.value, 0);
+
+    return getStatusTotal(data.superAdmins) + getStatusTotal(data.admins);
+  };
+
+  const totalActive = 10
+  //  getTotalActiveUsers(metrics);
+  const totalInactive = 10
+  //  getTotalInactiveUsers(metrics);
+  const activeSuperAdmins = 10
+  //  getActiveSuperAdmins(metrics);
+  const activeAdmins = 10
+  //  getActiveAdmins(metrics);
+  const totalPending = 10
+  //  getTotalPendingUsers(metrics);
+  const all = 10
+  //  getTotalUsers(metrics);
+
+  /* OV 08.21 / 08.21B / 08.25 — create, duplicate and edit a role. */ const [role, setRole] =
+    useState<{ mode: "create" | "edit"; row?: RoleRow; copyFrom?: string } | null>(null);
+
+  const filters: Array<["all" | TeamStatus, string, number]> = [
+    ["all", t.everyone, all],
+    ["active", t.active, totalActive],
+    ["invited", t.invited, totalPending],
+    // ["expired", t.expired],
+    ["deactivated", t.deactivated, totalInactive],
+  ];
+
+  const formatPeopleNote = (count: number) => t.peopleNote.replace("{{count}}", String(count));
+
+  return (
+    <PageShell>
+      <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-overline text-text-muted">{t.overline}</p>
+          <h1 className="mt-1 text-2xl font-semibold text-text-primary sm:text-[28px]">
+            {t.title}
+          </h1>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {onRoles ? (
+            <Gated permission="users.change_role">
+              <Button variant="dark" onClick={() => setRole({ mode: "create" })}>
+                {t.createRole}
+              </Button>
+            </Gated>
+          ) : (
+            <Gated permission="users.invite">
+              <Button variant="dark" onClick={() => setInvite(true)}>
+                <UserPlus className="h-4 w-4" />
+                {t.invite}
+              </Button>
+            </Gated>
+          )}
+        </div>
+      </header>
+      <div className="mb-5 flex gap-2 border-b border-border-subtle">
+        <Link
+          to="/team"
+          search={{}}
+          className={`-mb-px border-b-2 px-3 pb-3 text-sm ${onRoles ? "border-transparent text-text-muted" : "border-primary font-semibold text-text-primary"}`}
+        >
+          {t.peopleTab}
+        </Link>
+        <Link
+          to="/team"
+          search={{ tab: "roles" as const }}
+          className={`-mb-px border-b-2 px-3 pb-3 text-sm ${onRoles ? "border-primary font-semibold text-text-primary" : "border-transparent text-text-muted"}`}
+        >
+          {t.rolesTab}
+        </Link>
+      </div>
+      {onRoles ? (
+        <RolesTab
+          lang={lang}
+          t={t}
+          page={rolepage}
+          search={searchRole}
+          setPage={setRolePage}
+          totalPages={totalRolesPages}
+          setSearch={setSearchRole}
+          created={state === "created"}
+          onEdit={(r) => setRole({ mode: "edit", row: r })}
+          onDuplicate={(r) => setRole({ mode: "create", row: r, copyFrom: r.name })}
+          roles={roles}
+          meta={rolesMeta}
+          isLoading={isLoading}
+          refetch={refetch}
+        />
+      ) : (
+        <>
+          {/* <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Metric
+              label={t.people}
+              value={num(totalActive || 0)}
+              note={formatPeopleNote(totalInactive)}
+            />
+            <Metric
+              label={t.owners}
+              value={`${formatCount(activeSuperAdmins || 0, roleNames[lang].owner)} ·${" "} ${formatCount(activeAdmins || 0, roleNames[lang].admin)}`}
+              note={t.ownersNote}
+              tone="brand"
+            />
+            <Metric
+              label={t.invitations}
+              value={totalPending || 0}
+              note={asAdmin ? t.adminInvitationNote : t.invitationNote}
+              tone="warn"
+            />
+          </div> */}
+          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="scrollbar-none flex gap-2 overflow-x-auto">
+              {filters.map(([v, l, count]) => (
+                <Button
+                  key={v}
+                  variant={filter === v ? "dark" : "outline"}
+                  size="sm"
+                  onClick={() => setFilter(v)}
+                >
+                  {l}
+                  <span
+                    className={`rounded-full px-1.5 text-[10px] ${filter === v ? "bg-primary text-primary-foreground" : "bg-status-neutral-bg text-brand-deep"}`}
+                  >
+                    {num(count || 0)}
+                  </span>
+                </Button>
+              ))}
+            </div>
+            <p className="ms-auto text-xs text-text-muted">{t.outside}</p>
+          </div>
+          <div className="mb-4">
+            <label
+              htmlFor="team-search"
+              className="mb-2 block text-sm font-medium text-text-primary"
+            >
+              {lang === "ar" ? "البحث عن عضو" : "Search team members"}
+            </label>
+
+            <div className="relative w-full max-w-md">
+              <Search
+                aria-hidden="true"
+                className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted"
+              />
+
+              <input
+                id="team-search"
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder={
+                  lang === "ar"
+                    ? "ابحث بالاسم أو البريد الإلكتروني..."
+                    : "Search by name or email..."
+                }
+                className="h-10 w-full rounded-lg border border-border-subtle bg-surface-default ps-10 pe-3 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted"
+              />
+            </div>
+          </div>
+          <section className="overflow-hidden rounded-lg border border-border-subtle bg-surface-default">
+            <div className="overflow-x-auto">
+              <div className="min-w-[1180px]">
+                <div className="grid grid-cols-[258px_158px_1fr_138px_118px_170px] gap-3 bg-surface-subtle px-4 py-3 text-overline text-text-muted">
+                  <span>{t.person}</span>
+                  <span>{t.role}</span>
+                  <span>{t.reach}</span>
+                  <span>{t.status}</span>
+                  <span>{t.phoneNumber}</span>
+                  <span />
+                </div>
+
+                {loading ? (
+                  <div className="p-4">
+                    <TableSkeleton cols={1} />
+                  </div>
+                ) : error ? (
+                  <div className="flex min-h-[280px] flex-col items-center justify-center px-6 py-10 text-center">
+                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-destructive/10">
+                      <CircleAlert className="h-7 w-7 text-destructive" />
+                    </div>
+
+                    <h3 className="text-base font-semibold text-foreground">{t.errorTitle}</h3>
+
+                    <p className="mt-1 max-w-sm text-sm text-muted-foreground">{error.message}</p>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void dispatch(fetchTeam(teamParams));
+                      }}
+                      className="mt-4 inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium transition-colors hover:bg-muted"
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      {t.retry}
+                    </button>
+                  </div>
+                ) : team?.length ? (
+                  team.map((m) => (
+                    <MemberRow
+                      key={m.id}
+                      member={m}
+                      lang={lang}
+                      t={t}
+                      open={() => setSelected(m)}
+                    />
+                  ))
+                ) : (
+                  <div className="flex min-h-[280px] flex-col items-center justify-center px-6 py-10 text-center">
+                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+                      <UsersRound className="h-7 w-7 text-muted-foreground" />
+                    </div>
+
+                    <h3 className="text-base font-semibold text-foreground">{t.noMembers}</h3>
+
+                    <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                      {t.noMembersDescription}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {!loading && !error && totalPages > 1 && (
+              <ReusablePagination
+                page={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+                isLoading={loading}
+                lang={lang}
+                showBorder
+              />
+            )}
+          </section>
+          <section className="mt-5 rounded-lg border border-border-subtle bg-surface-default p-5">
+            <h2 className="text-base font-semibold text-text-primary">{t.roleMatrix}</h2>
+            <p className="mt-1 text-xs text-text-muted">{t.roleMatrixNote}</p>
+            <div className="mt-4 overflow-hidden rounded-lg border border-border-subtle">
+              {roles.map((role) => (
+                <div
+                  key={role?.id}
+                  className="grid gap-3 border-b border-border-subtle p-4 last:border-0 md:grid-cols-[330px_1fr]"
+                >
+                  <div>
+                    <b className="text-sm text-text-primary">
+                      {role?.[`name${lang === "en" ? "En" : "Ar"}`]}
+                    </b>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 min-h-[60px]">
+                    {role?.permissions?.slice(0, 6)?.map((permission) => (
+                      <ReachChip key={permission?.id} tint={permission?.httpMethod}>
+                        <div className="truncate max-w-[120px] px-2">
+                          {permission?.[lang === "ar" ? "nameAr" : "nameEn"]}
+                        </div>
+                      </ReachChip>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+          <p className="mt-4 rounded-lg bg-surface-subtle p-4 text-xs leading-5 text-text-secondary">
+            {t.footer}
+          </p>
+        </>
+      )}
+      <InviteDialog
+        open={invite}
+        onClose={() => setInvite(false)}
+        roles={roles}
+        teamParams={teamParams}
+      />
+      {selected && (
+        <ManageMemberDrawer
+          teamParams={teamParams}
+          member={selected}
+          onClose={() => setSelected(null)}
+          roles={roles}
+        />
+      )}
+      <PermissionReference open={permissions} onClose={() => setPermissions(false)} />
+      <TransferDialog open={transfer} onClose={() => setTransfer(false)} />
+      {role && (
+        <RoleOverlay
+          key={`${role.mode}-${role.copyFrom ?? role.row?.id ?? "new"}`}
+          mode={role.mode}
+          onClose={() => setRole(null)}
+          {...(role.row
+            ? {
+                roleName: lang === "ar" ? role.row.nameAr : role.row.name,
+                people: role.row.people,
+                holder: "Layla Hassan",
+              }
+            : {})}
+          {...(role.copyFrom ? { copyFrom: role.copyFrom } : {})}
+          role={role.row}
+          onSuccess={refetch}
+        />
+      )}
+    </PageShell>
+  );
+}
+function Metric({
+  label,
+  value,
+  note,
+  tone,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  tone?: "brand" | "warn";
+}) {
+  return (
+    <div
+      className={`min-h-[97px] rounded-lg p-4 ${tone === "brand" ? "bg-primary-subtle" : tone === "warn" ? "bg-status-warning-bg" : "border border-border-subtle bg-surface-default"}`}
+    >
+      <p className="text-overline text-text-muted">{label}</p>
+      <b className="mt-1 block text-2xl text-text-primary">{value}</b>
+      <p className="mt-1 text-[10px] leading-4 text-text-secondary">{note}</p>
+    </div>
+  );
+}
+function Person({ m, lang }: { m: TeamMember; lang: "en" | "ar" }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="uppercase grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-brand-deep text-xs font-semibold text-text-inverse">
+        {m.username?.[0]}
+      </span>
+      <div className="min-w-0">
+        <b className="block truncate text-xs font-medium text-text-primary">{m.username}</b>
+        <p className="truncate text-[11px] text-text-muted">{m.email}</p>
+      </div>
+    </div>
+  );
+}
+function MemberRow({
+  member: m,
+  lang,
+  t,
+  open,
+}: {
+  member: TeamMember;
+  lang: "en" | "ar";
+  t: any;
+  open: () => void;
+}) {
+  const { c } = useLanguage();
+
+  return (
+    <div className="grid grid-cols-[258px_158px_1fr_138px_118px_170px] items-center gap-3 border-t border-border-subtle px-4 py-3">
+      <Person m={m} lang={lang} />
+      <div>
+        <b className="text-xs text-text-primary">
+          {m?.permissionProfiles[0]?.[lang === "ar" ? "nameAr" : "nameEn"]}
+        </b>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {m?.permissionProfiles?.flatMap((profile) =>
+          profile.permissions
+            ?.slice(0, 2)
+            ?.map((permission) => (
+              <StatusPill key={permission}>
+                {lang === "ar" ? permission.nameAr : permission.nameEn}
+              </StatusPill>
+            )),
+        )}
+      </div>
+      <div>
+        {/* <StatusPill tone={statusTone[m.status]}>{t[m.status]}</StatusPill> */}
+        <StatusPill
+          tone={m.isActive && !m.isActivated ? statusTone["invited"] : statusTone[m.status]}
+        >
+          {m.isActive && !m.isActivated ? t["invited"] : t[m.status]}
+        </StatusPill>
+      </div>
+      <span className="text-xs text-text-primary">{m.phoneNumber}</span>
+      <Button variant="outline" size="sm" onClick={open}>
+        {`${t.manage}`}
+      </Button>
+    </div>
+  );
+}
+
+/** UI 08.0 — the matrix tints each role's chips, and paints a limit red. */
+const TINTS = {
+  GET: "bg-[#edffd6]",
+  POST: "bg-[#e8f1f8]",
+  PATCH: "bg-[#eef1ee]",
+  DELETE: "bg-[#fff6e6]",
+} as const;
+
+function ReachChip({
+  tint,
+  negative,
+  children,
+}: {
+  tint: keyof typeof TINTS;
+  negative: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-3 py-1 text-[12px] leading-[14px] ${negative ? "bg-[#fde9e7] text-[#a12b2b]" : `${TINTS[tint]} text-[#41544a]`}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+export const formatDate = (date: string, lang: "en" | "ar") => {
+  return new Intl.DateTimeFormat(lang === "ar" ? "ar-EG" : "en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(date));
+};
+
+function RolesTab({
+  page,
+  search,
+  setPage,
+  totalPages,
+  setSearch,
+  meta,
+  roles,
+  lang,
+  t,
+  created,
+  onEdit,
+  onDuplicate,
+  isLoading,
+  refetch,
+}: {
+  page: number;
+  PAGE_SIZE: number;
+  search: string;
+  totalPages: any;
+  roles: PermissionProfile | undefined;
+  lang: "en" | "ar";
+  t: any;
+  meta: any;
+  created: boolean;
+  onEdit: (r: RoleRow) => void;
+  onDuplicate: (r: RoleRow) => void;
+  refetch: () => void;
+  setPage: () => void;
+  setSearch: () => void;
+  isLoading: boolean;
+}) {
+  const [selectedRole, setSelectedRole] = useState<number | null>(null);
+  const { c } = useLanguage();
+
+  const { mutate: deleteProfile, isPending: deletePending } = useDeletePermissionProfile();
+
+  const deleteRole = (id: string) => {
+    setSelectedRole(id);
+  };
+
+  const handleDeleteProfile = (id) => {
+    if (!id) return;
+    deleteProfile(
+      { id },
+      {
+        onSuccess: () => {
+          setSelectedRole(null);
+          refetch();
+        },
+      },
+    );
+  };
+
+  const handleDelete = () => {
+    if (!selectedRole) return;
+
+    handleDeleteProfile(selectedRole);
+  };
+
+  return (
+    <>
+      {created && (
+        <div className="mb-4 rounded-lg border border-primary-subtle-border bg-primary-subtle p-4 text-xs text-text-primary">
+          {fill(t.roleCreated, {
+            name:
+              lang === "ar"
+                ? (roles[roles.length - 1]?.nameAr ?? "")
+                : (roles[roles.length - 1]?.nameEn ?? ""),
+          })}
+        </div>
+      )}
+      <div className="mb-4">
+        <label htmlFor="roles-search" className="mb-2 block text-sm font-medium text-text-primary">
+          {lang === "ar" ? "البحث عن دور" : "Search roles"}
+        </label>
+
+        <div className="relative w-full max-w-md">
+          <Search
+            aria-hidden="true"
+            className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted"
+          />
+
+          <input
+            id="roles-search"
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={lang === "ar" ? "ابحث عن دور..." : "Search roles..."}
+            className="h-10 w-full rounded-lg border border-border-subtle bg-surface-default ps-10 pe-3 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted"
+          />
+        </div>
+      </div>
+      <section className="overflow-hidden rounded-lg border border-border-subtle bg-surface-default">
+        <div className="hidden overflow-x-auto lg:block">
+          <div className="min-w-[980px]">
+            <div className="grid grid-cols-[200px_120px_70px_1fr_180px_190px] gap-3 bg-surface-subtle px-4 py-3 text-overline text-text-muted">
+              <span>{t.roleCol}</span>
+              <span>{t.typeCol}</span>
+              <span>{t.peopleCol}</span>
+              <span>{t.reach}</span>
+              <span>{t.createdAt}</span>
+              <span />
+            </div>
+            {isLoading ? (
+              <div className="p-4">
+                <TableSkeleton cols={1} />
+              </div>
+            ) : roles?.length ? (
+              roles.map((r) => (
+                <div
+                  key={r.id}
+                  className="grid grid-cols-[200px_120px_70px_1fr_180px_190px] items-center gap-3 border-t border-border-subtle px-4 py-3 text-xs"
+                >
+                  <b className="text-sm text-text-primary">{lang === "ar" ? r.nameAr : r.nameEn}</b>
+                  <StatusPill
+                    tone={r.kind === "custom" ? "brand" : "neutral"}
+                    className="max-w-[100px]"
+                  >
+                    {r.kind === "custom" ? t.custom : t.builtIn}
+                  </StatusPill>
+                  <span>{fill(t.manyPeople, { count: r.totalAssignedUsers })}</span>
+                  <span className="text-text-secondary line-clamp-2">
+                    {r?.permissions
+                      .map((item) => item?.[`name${lang === "en" ? "En" : "Ar"}`])
+                      .join(", ") || "noRolesSelected"}
+                  </span>
+                  <span className="text-text-muted">{formatDate(r.createdAt, lang)}</span>
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="outline" onClick={() => onEdit(r)}>
+                      {t.edit}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => onDuplicate(r)}>
+                      {t.duplicate}
+                    </Button>
+                    <Button
+                      disabled={r.totalAssignedUsers}
+                      size="sm"
+                      variant={r.totalAssignedUsers ? "ghost" : "outline"}
+                      onClick={() => deleteRole(r.id)}
+                    >
+                      {t.remove}
+                    </Button>
+                  </div>
+                  <DeleteDialog
+                    open={selectedRole === r.id}
+                    title={c.common.deleteTitle}
+                    description={c.common.deleteDescription}
+                    onClose={() => setSelectedRole(null)}
+                    onConfirm={handleDelete}
+                    isPending={deletePending}
+                  />
+                </div>
+              ))
+            ) : (
+              <div className="flex min-h-[280px] flex-col items-center justify-center px-6 py-10 text-center">
+                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+                  <UsersRound className="h-7 w-7 text-muted-foreground" />
+                </div>
+
+                <h3 className="text-base font-semibold text-foreground">{t.noRoles}</h3>
+
+                <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                  {t.noRolesDescription}
+                </p>
+              </div>
+            )}
+            {!isLoading && totalPages > 1 && (
+              <ReusablePagination
+                page={page}
+                totalPages={totalPages}
+                onPageChange={setPage}
+                isLoading={isLoading}
+                lang={lang}
+                showBorder
+              />
+            )}
+          </div>
+        </div>
+        <div className="grid gap-3 p-3 lg:hidden">
+          {roles.map((r) => (
+            <article key={r.id} className="rounded-lg border border-border-subtle p-4">
+              <div className="flex items-start justify-between gap-3">
+                <b className="text-sm text-text-primary">{lang === "ar" ? r.nameAr : r.nameEn}</b>
+                <StatusPill tone={r.kind === "custom" ? "brand" : "neutral"}>
+                  {r.kind === "custom" ? t.custom : t.builtIn}
+                </StatusPill>
+              </div>
+              <span className="mt-2 text-xs text-text-muted line-clamp-2">
+                {r?.permissions
+                  .map((item) => item?.[`name${lang === "en" ? "En" : "Ar"}`])
+                  .join(", ") || "noRolesSelected"}
+              </span>
+              <p className="mt-2 text-xs text-text-muted">
+                <span>{fill(t.manyPeople, { count: r.totalAssignedUsers })}</span>
+              </p>
+            </article>
+          ))}
+          {!isLoading && totalPages > 1 && (
+            <ReusablePagination
+              page={page}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              isLoading={isLoading}
+              lang={lang}
+              showBorder
+            />
+          )}
+        </div>
+        <div className="border-t border-border-subtle px-4 py-4 text-xs text-text-muted">
+          {fill(t.rolesFooter, {
+            total: meta?.total ?? roles.length,
+            builtIn: 0,
+            custom: roles.length,
+            people: 0,
+          })}
+        </div>
+      </section>
+      {/* )} */}
+      <p className="mt-4 rounded-lg bg-surface-subtle p-4 text-xs leading-5 text-text-secondary">
+        {t.footer}
+      </p>
+    </>
+  );
+}

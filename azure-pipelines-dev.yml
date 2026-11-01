@@ -1,0 +1,43 @@
+trigger:
+  - dev
+
+pool:
+  name: reveal
+  demands:
+    - agent.name -equals reveal
+
+variables:
+  appName: 'hoteliana-agent-dashboard'
+  deployDir: '/var/www/$(appName)'
+  envFile: '.env-dev'
+
+stages:
+  - stage: BuildAndDeploy
+    displayName: Build & Deploy static files
+    jobs:
+      - job: Deploy
+        displayName: Deploy
+        steps:
+          - task: NodeTool@0
+            displayName: Install Node.js 22
+            inputs:
+              versionSpec: '22.x'
+
+          - script: |
+              set -e
+              cp $(envFile) .env
+              npm ci
+              npm run build
+            displayName: Build React app
+
+          - script: |
+              set -e
+              sudo mkdir -p $(deployDir)
+              sudo rm -rf $(deployDir).new
+              sudo cp -a ./dist $(deployDir).new
+              sudo rm -rf $(deployDir).old
+              sudo mv $(deployDir) $(deployDir).old
+              sudo mv $(deployDir).new $(deployDir)
+              sudo rm -rf $(deployDir).old
+              sudo chown -R www-data:www-data $(deployDir)
+            displayName: Deploy to /var/www

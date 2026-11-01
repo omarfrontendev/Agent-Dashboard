@@ -1,0 +1,129 @@
+// src/hooks/useUsers.ts
+
+import { useQuery } from "@tanstack/react-query";
+import { endpoints } from "@/api/endpoints";
+import { api } from "@/api/client";
+import { PermissionCatalogItem, PermissionProfilesData, PermissionsCatalogResponse } from "./types";
+import { useLanguage } from "@/lib/i18n";
+import { AxiosError } from "axios";
+
+export type ApiResponse<T> = {
+  status: string;
+  message: string;
+  data: T;
+};
+
+type ApiErrorResponse = {
+  status: string;
+  message: string;
+  data?: {
+    errors?: string[];
+  };
+};
+
+type ProfilesParams = {
+  page?: number;
+  limit?: number;
+  search?: string;
+};
+
+const fetchProfiles = async ({
+  page = 1,
+  limit = 10,
+  search = "",
+}: ProfilesParams = {}): Promise<PermissionProfilesData> => {
+  const response = await api.get<ApiResponse<PermissionProfilesData>>(
+    endpoints.profiles.getProfiles,
+    {
+      params: {
+        page,
+        limit,
+        search: search || undefined,
+      },
+    },
+  );
+
+  return response.data.data;
+};
+
+export const useProfiles = ({ page = 1, limit = 10, search = "" }: ProfilesParams = {}) => {
+  const { data, error, isFetching, isError, refetch } = useQuery<
+    PermissionProfilesData,
+    AxiosError<ApiErrorResponse>
+  >({
+    queryKey: ["profiles", page, limit, search],
+    queryFn: () => fetchProfiles({ page, limit, search }),
+  });
+
+  const profiles =
+    data?.profiles.map((profile) => ({
+      ...profile,
+      kind: "custom" as const,
+    })) ?? [];
+
+  return {
+    profiles,
+    meta: data?.meta,
+    isLoading: isFetching,
+    isError,
+    error,
+    refetch,
+  };
+};
+
+const fetchAvailableProfiles = async (): Promise<PermissionsCatalogResponse> => {
+  const response = await api.get(endpoints.profiles.availableProfiles);
+
+  return (response.data?.data ?? []) as PermissionsCatalogResponse;
+};
+
+export const useAvailableProfiles = () => {
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: ["availableProfiles"],
+    queryFn: fetchAvailableProfiles,
+  });
+
+  const { lang } = useLanguage();
+
+  const catalog = Array.isArray(data) ? data : [];
+  const availableProfiles = Object.values(
+    (catalog as PermissionCatalogItem[])
+      .filter(({ key }: any) => key?.startsWith("agents."))
+      .map(({ key, nameEn, nameAr, moduleNameEn, moduleNameAr }) => {
+        const parts = key.split(".");
+        const method = parts.pop();
+        const module = lang === "en" ? moduleNameEn : moduleNameAr;
+        const name = lang === "en" ? nameEn : nameAr;
+
+        return {
+          module,
+          method,
+          name,
+          key,
+        };
+      })
+      .reduce((acc: any, item: any) => {
+        if (!acc[item.module]) {
+          acc[item.module] = {
+            module: item.module,
+            methods: [],
+          };
+        }
+
+        acc[item.module].methods.push({
+          method: item.method,
+          name: item.name,
+          key: item.key,
+        });
+
+        return acc;
+      }, {}),
+  );
+
+  return {
+    profiles: availableProfiles || [],
+    isLoading,
+    isError: error,
+    refetch,
+  };
+};
