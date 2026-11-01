@@ -728,8 +728,8 @@ function RolesTab({
                   <span>{fill(t.manyPeople, { count: r.totalAssignedUsers })}</span>
                   <span className="text-text-secondary line-clamp-2">
                     {r?.permissions
-                      .map((item) => item?.[`name${lang === "en" ? "En" : "Ar"}`])
-                      .join(", ") || "noRolesSelected"}
+                      ?.map((item) => item?.[`name${lang === "en" ? "En" : "Ar"}`])
+                      ?.join(", ") || "noRolesSelected"}
                   </span>
                   <span className="text-text-muted">{formatDate(r.createdAt, lang)}</span>
                   <div className="flex justify-end gap-2">
@@ -794,8 +794,8 @@ function RolesTab({
               </div>
               <span className="mt-2 text-xs text-text-muted line-clamp-2">
                 {r?.permissions
-                  .map((item) => item?.[`name${lang === "en" ? "En" : "Ar"}`])
-                  .join(", ") || "noRolesSelected"}
+                  ?.map((item) => item?.[`name${lang === "en" ? "En" : "Ar"}`])
+                  ?.join(", ") || "noRolesSelected"}
               </span>
               <p className="mt-2 text-xs text-text-muted">
                 <span>{fill(t.manyPeople, { count: r.totalAssignedUsers })}</span>

@@ -90,7 +90,6 @@ export const useAvailableProfiles = () => {
     (catalog as PermissionCatalogItem[])
       .filter(({ key }: any) => key?.startsWith("agent."))
       .map(({ key, nameEn, nameAr, moduleNameEn, moduleNameAr }) => {
-        console.log(key)
         const parts = key.split(".");
         const method = parts.pop();
         const module = lang === "en" ? moduleNameEn : moduleNameAr;
