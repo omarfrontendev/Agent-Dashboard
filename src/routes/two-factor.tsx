@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { fill, useLanguage } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { maskEmail } from "@/lib/mask-email";
 import { useVerifyOTP } from "@/components/auth/verify-otp/useVerify-otp";
 import { useRequestOTP } from "@/components/auth/request-otp/useRequestOtp";
 
@@ -61,6 +62,7 @@ function TwoFactorPage() {
   const { c } = useLanguage();
   const navigate = useNavigate();
   const [digits, setDigits] = useState(["", "", "", "", "", ""]);
+  const [incompleteCode, setIncompleteCode] = useState(false);
   // const [error, setError] = useState(false);
   const [triesLeft, setTriesLeft] = useState(MAX_TRIES - 1);
   const [resentBanner, setResentBanner] = useState(false);
@@ -69,6 +71,7 @@ function TwoFactorPage() {
   // const [loading, setLoading] = useState(false);
   const inputs = useRef<Array<HTMLInputElement | null>>([]);
   const { email } = Route.useSearch();
+  const maskedEmail = maskEmail(email);
 
   // focus the first box automatically on mount
   useEffect(() => {
@@ -86,6 +89,7 @@ function TwoFactorPage() {
   function fillFrom(index: number, raw: string) {
     const chars = raw.replace(/\D/g, "").split("");
     if (chars.length === 0) return;
+    setIncompleteCode(false);
     setDigits((prev) => {
       const next = [...prev];
       let i = index;
@@ -109,6 +113,7 @@ function TwoFactorPage() {
       fillFrom(index, value);
       return;
     }
+    setIncompleteCode(false);
     const clean = value.replace(/\D/g, "").slice(-1);
     setDigits((prev) => {
       const next = [...prev];
@@ -126,11 +131,18 @@ function TwoFactorPage() {
   const {
     mutateAsync: verifyOTP,
     isPending: isVerifyingOTP,
-    error
+    error,
+    reset: resetVerification,
   } = useVerifyOTP();
 
   async function submitCode(code: string) {
-    if (code.length !== 6 || isVerifyingOTP) return;
+    if (isVerifyingOTP) return;
+    if (code.length !== 6) {
+      setIncompleteCode(true);
+      return;
+    }
+
+    setIncompleteCode(false);
 
     const verification = await verifyOTP({
       email,
@@ -147,15 +159,23 @@ function TwoFactorPage() {
     }, 1000);
   }
 
-  const { mutate: requestOTP } = useRequestOTP();
+  const { mutate: requestOTP, isPending: isResendingOTP } = useRequestOTP();
 
   function resend() {
-    setDigits(["", "", "", "", "", ""]);
-    setTriesLeft(MAX_TRIES - 1);
-    setResentBanner(true);
-    setLeft(59);
-    inputs.current[0]?.focus();
-    requestOTP({ email })
+    requestOTP(
+      { email },
+      {
+        onSuccess: () => {
+          resetVerification();
+          setDigits(["", "", "", "", "", ""]);
+          setIncompleteCode(false);
+          setTriesLeft(MAX_TRIES - 1);
+          setResentBanner(true);
+          setLeft(RESEND_SECONDS);
+          inputs.current[0]?.focus();
+        },
+      }
+    );
   }
 
   return (
@@ -164,7 +184,7 @@ function TwoFactorPage() {
         overline={c.twoFactor.overline}
         title={c.twoFactor.title}
         subtitle={fill(c.twoFactor.subtitle, {
-          email: c.twoFactor.maskedEmail,
+          email: maskedEmail,
         })}
         footer={
           <>
@@ -186,13 +206,20 @@ function TwoFactorPage() {
             tone="success"
             title={c.twoFactor.sentTitle}
             body={fill(c.twoFactor.sentBody, {
-              email: c.twoFactor.maskedEmail,
+              email: maskedEmail,
             })}
           />
         )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            if (error) {
+              setDigits(["", "", "", "", "", ""]);
+              setIncompleteCode(false);
+              resetVerification();
+              inputs.current[0]?.focus();
+              return;
+            }
             submitCode(digits.join(""));
           }}
           className="space-y-5"
@@ -223,6 +250,8 @@ function TwoFactorPage() {
                       inputs.current[index - 1]?.focus();
                     }
                   }}
+                  aria-invalid={error || incompleteCode ? "true" : undefined}
+                  aria-describedby={`two-factor-code-helper${incompleteCode ? " two-factor-code-validation" : ""}`}
                   className={cn(
                     "font-data h-13 w-13 rounded-lg border bg-surface-default text-center text-2xl font-semibold text-text-primary outline-none transition-colors",
                     "h-[52px] w-full min-w-0 flex-1 px-0 sm:w-[52px] sm:flex-none focus:border-border-focus focus:ring-2 focus:ring-ring/20",
@@ -232,9 +261,18 @@ function TwoFactorPage() {
                 />
               ))}
             </div>
-            <p className="mt-2 text-xs leading-[1.5] text-text-muted">
+            <p id="two-factor-code-helper" className="mt-2 text-xs leading-[1.5] text-text-muted">
               {c.twoFactor.helper}
             </p>
+            {incompleteCode && (
+              <p
+                id="two-factor-code-validation"
+                role="alert"
+                className="mt-2 text-sm text-status-danger"
+              >
+                {c.twoFactor.incompleteCode}
+              </p>
+            )}
           </div>
 
           <label className="flex cursor-pointer items-start gap-2.5">
@@ -262,6 +300,7 @@ function TwoFactorPage() {
               <button
                 type="button"
                 onClick={resend}
+                disabled={isResendingOTP || isVerifyingOTP}
                 className="text-sm text-text-link hover:underline"
               >
                 {error ? c.twoFactor.resendAfterError : c.twoFactor.resend}
